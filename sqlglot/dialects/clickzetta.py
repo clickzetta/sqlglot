@@ -10,6 +10,7 @@ from sqlglot.dialects.dialect import (
     if_sql,
 )
 from sqlglot.dialects.spark import Spark
+from sqlglot.dialects.mysql import MySQL
 from sqlglot.tokens import Tokenizer, TokenType
 
 logger = logging.getLogger("sqlglot")
@@ -17,7 +18,7 @@ logger = logging.getLogger("sqlglot")
 try:
     from sqlglot import local_clickzetta_settings
 except ImportError as e:
-    logger.warning(f"Failed to import local_clickzetta_settings, reason: {e}")
+    logger.error(f"Failed to import local_clickzetta_settings, reason: {e}")
 
 
 def _anonymous_agg_func(self: ClickZetta.Generator, expression: exp.AnonymousAggFunc) -> str:
@@ -42,12 +43,9 @@ def _transform_create(expression: exp.Expression) -> exp.Expression:
     return expression
 
 
-def _groupconcat_to_wmconcat(self: ClickZetta.Generator, expression: exp.GroupConcat) -> str:
-    this = self.sql(expression, "this")
-    sep = expression.args.get("separator")
-    if not sep:
-        sep = exp.Literal.string(",")
-    return f"WM_CONCAT({sep}, {self.sql(this)})"
+def _string_agg_sql(self: ClickZetta.Generator, expression: exp.GroupConcat) -> str:
+    separator = self.sql(expression, "separator")
+    return f"""GROUP_CONCAT({self.sql(expression, "this")}{f' SEPARATOR {separator}' if separator else ''})"""
 
 
 def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> str:
@@ -348,11 +346,17 @@ class ClickZetta(Spark):
             **Tokenizer.KEYWORDS,
             "CREATE USER": TokenType.COMMAND,
             "DROP USER": TokenType.COMMAND,
+            "SEPARATOR": TokenType.SEPARATOR,
             "SHOW USER": TokenType.COMMAND,
             "REVOKE": TokenType.COMMAND,
         }
 
     class Parser(Spark.Parser):
+        FUNCTION_PARSERS = {
+            **Spark.Parser.FUNCTION_PARSERS,
+            "GROUP_CONCAT": lambda self: MySQL.Parser._parse_group_concat(self),
+        }
+
         PROPERTY_PARSERS = {
             **Spark.Parser.PROPERTY_PARSERS,
             # ClickZetta has properties syntax similar to MySQL. e.g. PROPERTIES('key1'='value')
@@ -431,7 +435,7 @@ class ClickZetta(Spark):
             exp.CollateColumnConstraint: lambda self, e: "",
             exp.CharacterSetColumnConstraint: lambda self, e: "",
             exp.Create: transforms.preprocess([_transform_create]),
-            exp.GroupConcat: _groupconcat_to_wmconcat,
+            exp.GroupConcat: _string_agg_sql,
             exp.CurrentTime: lambda self, e: "DATE_FORMAT(NOW(),'HH:mm:ss')",
             exp.AtTimeZone: lambda self, e: self.func(
                 "CONVERT_TIMEZONE", e.args.get("zone"), e.this
