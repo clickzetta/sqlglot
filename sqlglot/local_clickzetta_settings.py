@@ -48,12 +48,15 @@ for dialect in [MySQL, Presto, Trino, Athena, StarRocks, Doris]:
     dialect.Parser.FUNCTIONS["AES_ENCRYPT"] = lambda args: exp.Anonymous(
         this="AES_ENCRYPT_MYSQL", expressions=args
     )
-    dialect.Parser.FUNCTIONS["DATE_ADD"] = _build_date_delta_with_interval(exp.DateAdd)
-    dialect.Parser.FUNCTIONS["DATE_SUB"] = _build_date_delta_with_interval(exp.DateSub)
 
 ClickHouse.Parser.FUNCTIONS["FORMATDATETIME"] = lambda args: exp.Anonymous(
     this="DATE_FORMAT_MYSQL", expressions=args
 )
+
+MySQL.Parser.FUNCTIONS["DATE_ADD"] = StarRocks.Parser.FUNCTIONS["DATE_ADD"] = Doris.Parser.FUNCTIONS[
+    "DATE_ADD"] = _build_date_delta_with_interval(exp.DateAdd)
+MySQL.Parser.FUNCTIONS["DATE_SUB"] = StarRocks.Parser.FUNCTIONS["DATE_SUB"] = Doris.Parser.FUNCTIONS[
+    "DATE_SUB"] = _build_date_delta_with_interval(exp.DateSub)
 
 for dialect in [Postgres, Redshift]:
     dialect.Parser.FUNCTIONS["TO_CHAR"] = lambda args: exp.Anonymous(
@@ -66,6 +69,10 @@ ClickHouse.Parser.FUNCTIONS["FROMUNIXTIMESTAMP64MILLI"] = lambda args: exp.UnixT
     zone=seq_get(args, 1) if len(args) == 2 else None,
     scale=exp.UnixToTime.MILLIS,
 )
+
+# Clickhouse's JSONExtract* and visitParamExtract*  will be parsed as JSONExtractScalar, which we do not support,
+# and different types need to be processed separately.
+# Notice: This will cause JSONEXTRACT* -> JSON_EXTRACT_PATH_TEXT related cases to fail.
 ClickHouse.Parser.FUNCTIONS["JSONEXTRACTSTRING"] = lambda args: exp.Anonymous(
     this="JSONEXTRACTSTRING", expressions=args
 )
@@ -81,6 +88,10 @@ ClickHouse.Parser.FUNCTIONS["SIMPLEJSONEXTRACTRAW"] = lambda args: exp.Anonymous
 ClickHouse.Parser.FUNCTIONS["JSONEXTRACTRAW"] = lambda args: exp.Anonymous(
     this="GET_JSON_OBJECT", expressions=args
 )
+
+# ClickHouse's toDateTime(expr[, timezone]) parameter expr supports String, Int, Date or DateTime.
+# To adapt to multiple types, we use the cast function for conversion.
+# Notice: This will cause TODATETIME -> CAST related cases to fail.
 ClickHouse.Parser.FUNCTIONS["TODATETIME"] = lambda args: exp.cast(
     seq_get(args, 0), exp.DataType.Type.DATETIME
 )

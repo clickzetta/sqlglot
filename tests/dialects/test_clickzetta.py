@@ -786,8 +786,8 @@ select j from a""",
             },
         )
         self.validate_all(
-            "SELECT DATE_ADD(CURRENT_DATE, -3)",
+            "SELECT DATE_ADD(CURRENT_DATE, (-1 - 2) * -1)",
             read={
-                "starrocks": "SELECT DATE_SUB(current_date(),3)",
+                "starrocks": "SELECT DATE_SUB(current_date(), -1-2)",
             },
         )

@@ -7,8 +7,9 @@ from sqlglot import exp
 from sqlglot import transforms
 from sqlglot.dialects.dialect import (
     rename_func,
-    if_sql,
+    if_sql, DATE_ADD_OR_SUB,
 )
+from sqlglot.dialects.hive import DATE_DELTA_INTERVAL
 from sqlglot.dialects.spark import Spark
 from sqlglot.dialects.mysql import MySQL
 from sqlglot.tokens import Tokenizer, TokenType
@@ -25,6 +26,31 @@ def _anonymous_agg_func(self: ClickZetta.Generator, expression: exp.AnonymousAgg
     if expression.this.upper() == "UNIQEXACT":
         return self.sql(exp.Count(this=exp.Distinct(expressions=expression)))
     return self.func(expression.this, *expression.expressions)
+
+
+# The current hive's _add_date_sql will lack parentheses, rewrite it
+def _add_date_sql(self: ClickZetta.Generator, expression: DATE_ADD_OR_SUB) -> str:
+    if isinstance(expression, exp.TsOrDsAdd) and not expression.unit:
+        return self.func("DATE_ADD", expression.this, expression.expression)
+
+    unit = expression.text("unit").upper()
+    func, multiplier = DATE_DELTA_INTERVAL.get(unit, ("DATE_ADD", 1))
+
+    if isinstance(expression, exp.DateSub):
+        multiplier *= -1
+
+    expr = expression.expression
+    if expr.is_number:
+        modified_increment = exp.Literal.number(expr.to_py() * multiplier)
+    else:
+        # We put parentheses on the expression, such as (1 + 1) * -1 translation
+        modified_increment = expr if isinstance(expr, exp.Paren) else exp.Paren(this=expr)
+        if multiplier != 1:
+            modified_increment = exp.Mul(  # type: ignore
+                this=modified_increment, expression=exp.Literal.number(multiplier)
+            )
+
+    return self.func(func, expression.this, modified_increment)
 
 
 def _transform_create(expression: exp.Expression) -> exp.Expression:
@@ -428,6 +454,7 @@ class ClickZetta(Spark):
             ),
             # in MaxCompute, datetime(col) is an alias of cast(col as datetime)
             exp.Datetime: rename_func("TO_TIMESTAMP"),
+            exp.DateSub: lambda self, e: _add_date_sql(self, e),
             exp.DefaultColumnConstraint: lambda self, e: "",
             exp.DuplicateKeyProperty: lambda self, e: "",
             exp.OnUpdateColumnConstraint: lambda self, e: "",
