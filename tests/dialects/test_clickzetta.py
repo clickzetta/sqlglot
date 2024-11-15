@@ -238,13 +238,7 @@ PROPERTIES (
             },
         )
         self.validate_all("ISNOTNULL(x)", read={"clickhouse": "isNotNull(x)"})
-        self.validate_all(
-            "SELECT WM_CONCAT(',', x)",
-            read={"postgres": "SELECT STRING_AGG(x, ',')"},
-            write={
-                "clickzetta": "SELECT WM_CONCAT(',', x)",
-            },
-        )
+
         self.validate_all(
             """SELECT DATE_FORMAT_PG(CURRENT_TIMESTAMP(), 'yyyy-"Q"Q')""",
             read={"postgres": """select to_char(current_timestamp, 'yyyy-"Q"Q')"""},
@@ -738,4 +732,62 @@ select j from a""",
             "SELECT SUM(MURMURHASH3_32('test'))",
             read={"starrocks": "select sum(murmur_hash3_32('test'))"},
             write={"clickzetta": "SELECT SUM(MURMURHASH3_32('test'))"},
+        )
+
+    def test_group_concat(self):
+        self.validate_all(
+            "SELECT GROUP_CONCAT('aa' SEPARATOR '|')",
+            read={
+                # From v3.0.6 and v3.1.3 onwards, there is a behavior change when you specify the separator.
+                #  Must use SEPARATOR to declare the separator
+                "starrocks": "SELECT GROUP_CONCAT('aa' SEPARATOR '|')",
+                "mysql": "SELECT GROUP_CONCAT('aa' SEPARATOR '|')",
+                "postgres": "SELECT STRING_AGG('aa', '|')",
+            },
+            write={
+                "clickzetta": "SELECT GROUP_CONCAT('aa' SEPARATOR '|')",
+            },
+        )
+
+        # using distinct delimiter in WM_CONCAT
+        self.validate_all(
+            "SELECT GROUP_CONCAT(DISTINCT name SEPARATOR ', ') FROM employees",
+            read={"starrocks": "SELECT GROUP_CONCAT(DISTINCT name SEPARATOR ', ') FROM employees",
+                  "mysql": "SELECT GROUP_CONCAT(DISTINCT name SEPARATOR ', ') FROM employees",
+                  "postgres": "SELECT STRING_AGG(DISTINCT name, ', ') FROM employees",
+                  },
+            write={
+                "clickzetta": "SELECT GROUP_CONCAT(DISTINCT name SEPARATOR ', ') FROM employees",
+            },
+        )
+
+        # GROUP_CONCAT with multiple columns
+        self.validate_all(
+            "SELECT GROUP_CONCAT(DISTINCT CONCAT(name, product) SEPARATOR ', ') FROM employees",
+            read={"starrocks": "SELECT GROUP_CONCAT(DISTINCT name,product SEPARATOR ', ') FROM employees",
+                  "mysql": "SELECT GROUP_CONCAT(DISTINCT name,product SEPARATOR ', ') FROM employees",
+                  },
+            write={
+                "clickzetta": "SELECT GROUP_CONCAT(DISTINCT CONCAT(name, product) SEPARATOR ', ') FROM employees",
+            },
+        )
+
+    def test_date_add_sub(self):
+        self.validate_all(
+            "SELECT TIMESTAMP_OR_DATE_ADD('DAY', -1, CURRENT_DATE)",
+            read={
+                "starrocks": "SELECT DATE_ADD(CURRENT_DATE(), -1)",
+            },
+        )
+        self.validate_all(
+            "SELECT TIMESTAMP_OR_DATE_ADD('DAY', 1, CURRENT_TIMESTAMP())",
+            read={
+                "starrocks": "SELECT DATE_ADD(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)",
+            },
+        )
+        self.validate_all(
+            "SELECT DATE_ADD(CURRENT_DATE, (-1 - 2) * -1)",
+            read={
+                "starrocks": "SELECT DATE_SUB(current_date(), -1-2)",
+            },
         )
