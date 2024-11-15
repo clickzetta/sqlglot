@@ -7,7 +7,7 @@ from sqlglot import exp
 from sqlglot import transforms
 from sqlglot.dialects.dialect import (
     rename_func,
-    if_sql,
+    if_sql, unit_to_str,
 )
 from sqlglot.dialects.spark import Spark
 from sqlglot.tokens import Tokenizer, TokenType
@@ -424,6 +424,7 @@ class ClickZetta(Spark):
             ),
             # in MaxCompute, datetime(col) is an alias of cast(col as datetime)
             exp.Datetime: rename_func("TO_TIMESTAMP"),
+            exp.DateTrunc: lambda self, e: self.func("DATE_TRUNC", unit_to_str(e), e.this),
             exp.DefaultColumnConstraint: lambda self, e: "",
             exp.DuplicateKeyProperty: lambda self, e: "",
             exp.OnUpdateColumnConstraint: lambda self, e: "",
