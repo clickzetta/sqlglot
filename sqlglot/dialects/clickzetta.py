@@ -8,8 +8,11 @@ from sqlglot import transforms
 from sqlglot.dialects.dialect import (
     rename_func,
     if_sql, unit_to_str,
+    DATE_ADD_OR_SUB,
 )
+from sqlglot.dialects.hive import DATE_DELTA_INTERVAL
 from sqlglot.dialects.spark import Spark
+from sqlglot.dialects.mysql import MySQL
 from sqlglot.tokens import Tokenizer, TokenType
 
 logger = logging.getLogger("sqlglot")
@@ -17,13 +20,38 @@ logger = logging.getLogger("sqlglot")
 try:
     from sqlglot import local_clickzetta_settings
 except ImportError as e:
-    logger.warning(f"Failed to import local_clickzetta_settings, reason: {e}")
+    logger.error(f"Failed to import local_clickzetta_settings, reason: {e}")
 
 
 def _anonymous_agg_func(self: ClickZetta.Generator, expression: exp.AnonymousAggFunc) -> str:
     if expression.this.upper() == "UNIQEXACT":
         return self.sql(exp.Count(this=exp.Distinct(expressions=expression)))
     return self.func(expression.this, *expression.expressions)
+
+
+# The current hive's _add_date_sql will lack parentheses, rewrite it
+def _add_date_sql(self: ClickZetta.Generator, expression: DATE_ADD_OR_SUB) -> str:
+    if isinstance(expression, exp.TsOrDsAdd) and not expression.unit:
+        return self.func("DATE_ADD", expression.this, expression.expression)
+
+    unit = expression.text("unit").upper()
+    func, multiplier = DATE_DELTA_INTERVAL.get(unit, ("DATE_ADD", 1))
+
+    if isinstance(expression, exp.DateSub):
+        multiplier *= -1
+
+    expr = expression.expression
+    if expr.is_number:
+        modified_increment = exp.Literal.number(expr.to_py() * multiplier)
+    else:
+        # We put parentheses on the expression, such as (1 + 1) * -1 translation
+        modified_increment = expr if isinstance(expr, exp.Paren) else exp.Paren(this=expr)
+        if multiplier != 1:
+            modified_increment = exp.Mul(  # type: ignore
+                this=modified_increment, expression=exp.Literal.number(multiplier)
+            )
+
+    return self.func(func, expression.this, modified_increment)
 
 
 def _transform_create(expression: exp.Expression) -> exp.Expression:
@@ -42,12 +70,9 @@ def _transform_create(expression: exp.Expression) -> exp.Expression:
     return expression
 
 
-def _groupconcat_to_wmconcat(self: ClickZetta.Generator, expression: exp.GroupConcat) -> str:
-    this = self.sql(expression, "this")
-    sep = expression.args.get("separator")
-    if not sep:
-        sep = exp.Literal.string(",")
-    return f"WM_CONCAT({sep}, {self.sql(this)})"
+def _string_agg_sql(self: ClickZetta.Generator, expression: exp.GroupConcat) -> str:
+    separator = self.sql(expression, "separator")
+    return f"""GROUP_CONCAT({self.sql(expression, "this")}{f' SEPARATOR {separator}' if separator else ''})"""
 
 
 def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> str:
@@ -348,11 +373,17 @@ class ClickZetta(Spark):
             **Tokenizer.KEYWORDS,
             "CREATE USER": TokenType.COMMAND,
             "DROP USER": TokenType.COMMAND,
+            "SEPARATOR": TokenType.SEPARATOR,
             "SHOW USER": TokenType.COMMAND,
             "REVOKE": TokenType.COMMAND,
         }
 
     class Parser(Spark.Parser):
+        FUNCTION_PARSERS = {
+            **Spark.Parser.FUNCTION_PARSERS,
+            "GROUP_CONCAT": lambda self: MySQL.Parser._parse_group_concat(self),
+        }
+
         PROPERTY_PARSERS = {
             **Spark.Parser.PROPERTY_PARSERS,
             # ClickZetta has properties syntax similar to MySQL. e.g. PROPERTIES('key1'='value')
@@ -425,6 +456,7 @@ class ClickZetta(Spark):
             # in MaxCompute, datetime(col) is an alias of cast(col as datetime)
             exp.Datetime: rename_func("TO_TIMESTAMP"),
             exp.DateTrunc: lambda self, e: self.func("DATE_TRUNC", unit_to_str(e), e.this),
+            exp.DateSub: lambda self, e: _add_date_sql(self, e),
             exp.DefaultColumnConstraint: lambda self, e: "",
             exp.DuplicateKeyProperty: lambda self, e: "",
             exp.OnUpdateColumnConstraint: lambda self, e: "",
@@ -432,7 +464,7 @@ class ClickZetta(Spark):
             exp.CollateColumnConstraint: lambda self, e: "",
             exp.CharacterSetColumnConstraint: lambda self, e: "",
             exp.Create: transforms.preprocess([_transform_create]),
-            exp.GroupConcat: _groupconcat_to_wmconcat,
+            exp.GroupConcat: _string_agg_sql,
             exp.CurrentTime: lambda self, e: "DATE_FORMAT(NOW(),'HH:mm:ss')",
             exp.AtTimeZone: lambda self, e: self.func(
                 "CONVERT_TIMEZONE", e.args.get("zone"), e.this
