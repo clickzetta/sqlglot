@@ -6,7 +6,7 @@ import typing as t
 from sqlglot import exp, transforms
 from sqlglot.dialects.dialect import (
     rename_func,
-    if_sql, )
+    if_sql, unit_to_str, )
 from sqlglot.dialects.mysql import MySQL
 from sqlglot.dialects.postgres import Postgres
 from sqlglot.dialects.spark import Spark
@@ -331,6 +331,7 @@ class ClickZetta(Spark):
                 ]
             ),
             exp.DefaultColumnConstraint: lambda self, e: '',
+            exp.DateTrunc: lambda self, e: self.func("DATE_TRUNC", unit_to_str(e), e.this),
             exp.OnUpdateColumnConstraint: lambda self, e: '',
             exp.AutoIncrementColumnConstraint: lambda self, e: '',
             exp.CollateColumnConstraint: lambda self, e: '',

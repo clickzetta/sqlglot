@@ -1,3 +1,4 @@
+from sqlglot import except_
 from tests.dialects.test_dialect import Validator
 
 class TestClickzetta(Validator):
@@ -412,3 +413,31 @@ select j from a""",
     def test_hash_func(self):
         self.validate_all("select sum(murmur_hash3_32('test'))",
                           write={"clickzetta": "SELECT SUM(MURMURHASH3_32('test'))"})
+
+    def test_date_trunc(self):
+        trunc_sqls = [
+            "SELECT DATE_TRUNC('YEAR', '2022-01-01')",
+            "SELECT DATE_TRUNC('MONTH', TIMESTAMP '2022-01-01 12:34:56')",
+            "SELECT DATE_TRUNC('DAY', DATE '2022-01-01')",
+            "SELECT DATE_TRUNC('HOUR', TIMESTAMP '2022-01-01 12:34:56')",
+            "SELECT DATE_TRUNC('MINUTE', TIMESTAMP '2022-01-01 12:34:56')",
+            "SELECT DATE_TRUNC('SECOND', TIMESTAMP '2022-01-01 12:34:56')",
+        ]
+
+        except_sqls = [
+            "SELECT DATE_TRUNC('YEAR', '2022-01-01')",
+            "SELECT DATE_TRUNC('MONTH', CAST('2022-01-01 12:34:56' AS TIMESTAMP))",
+            "SELECT DATE_TRUNC('DAY', CAST('2022-01-01' AS DATE))",
+            "SELECT DATE_TRUNC('HOUR', CAST('2022-01-01 12:34:56' AS TIMESTAMP))",
+            "SELECT DATE_TRUNC('MINUTE', CAST('2022-01-01 12:34:56' AS TIMESTAMP))",
+            "SELECT DATE_TRUNC('SECOND', CAST('2022-01-01 12:34:56' AS TIMESTAMP))",
+        ]
+
+        for trunc_sql, except_sql in zip(trunc_sqls, except_sqls):
+            with self.subTest(f"Testing Clickzetta roundtrip & transpilation of: {trunc_sql}"):
+                self.validate_all(
+                    trunc_sql,
+                    write={
+                        "clickzetta": except_sql,
+                    },
+                )
